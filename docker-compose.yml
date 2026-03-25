@@ -1,0 +1,42 @@
+services:
+  # ── FastAPI 백엔드 ────────────────────────────────────────────────────────
+  api:
+    build: ./backend
+    container_name: routeon-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app          # 개발 중 핫리로드용 (배포 시 제거)
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: routeon-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: routeon
+      POSTGRES_PASSWORD: routeon
+      POSTGRES_DB: routeon
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U routeon"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

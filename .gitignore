@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# 환경 변수 (앱키, DB 비밀번호 등 — 절대 커밋 금지)
+.env
+backend/.env
+**/.env
+
+# pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Docker
+*.log
+
+# Flutter
+driver_app/.dart_tool/
+driver_app/build/
+driver_app/.flutter-plugins
+driver_app/.flutter-plugins-dependencies
+driver_app/pubspec.lock
+
+# OS
+Thumbs.db
+.DS_Store

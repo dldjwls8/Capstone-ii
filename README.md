@@ -1,88 +1,479 @@
-SH-VRP: 소형 및 대형 화물차 통합 인간 중심 경로 최적화 플랫폼
-Small & Heavy Vehicle Route Optimization Platform for Human-Centric Safety
+# RouteOn — 화물차 경로 최적화 API 서버
 
-본 프로젝트는 효율성만을 강조하는 기존 물류 시스템에서 벗어나, 화물차 운전자의 안전과 법적 휴게 시간을 보장하는 B2B 안전 관리 플랫폼입니다. 차량 번호판 체계('배' vs '아바사자')에 따른 운행 특성을 분석하고, 최신 법규를 준수하는 최적 경로를 제안합니다.
+화물차 법정 휴게 규정(2시간 운전 시 15분 휴식)을 자동으로 반영하여  
+OR-Tools + TMAP 화물차 전용 API로 최적 동선을 계산하는 VRP 엔진입니다.
 
-🚀 핵심 기능 (Key Features)
-- 멀티 플랫폼: Flutter 기반 기사용 앱과 관리자용 웹 대시보드 제공
-- 실시간 네비게이션: TMAP SDK 연동, 지도 렌더링 및 목적지 경로 안내, GPS 동기화
-- 고도화 기능(순차 개발): 차종별 경로 최적화(HFVRP), 법정 휴게시간 자동 삽입(VRPRP), 위험 구간 기반 안전 점수 시각화
+---
 
-🛠 기술 스택 (Tech Stack)
-- Backend: FastAPI, Python 3.10+, Google OR-Tools (VRP Solver)
-- Data/Infra: PostgreSQL + PostGIS, Redis(거리 행렬 캐싱), Docker & Docker Compose, Synology NAS(Container Manager)
-- Frontend: Flutter(Android/iOS), TMAP JavaScript/Mobile SDK
+## 목차
 
-📂 시스템 아키텍처 (Architecture)
-1) Flutter App에서 배송지 목록과 차종을 입력하면 서버로 최적화 요청
-2) 서버가 TMAP API로 거리 행렬을 수집하고, OR-Tools로 VRPTW/HFVRP/VRPRP 연산
-3) PostGIS에서 인근 휴게 시설·위험 구역을 조회하여 휴게 지점과 안전 점수를 포함한 경로를 생성
-4) 결과를 앱/웹에 반환하여 안내
+1. [프로젝트 개요](#1-프로젝트-개요)
+2. [기술 스택](#2-기술-스택)
+3. [빠른 시작 (Docker)](#3-빠른-시작-docker)
+4. [로컬 개발 환경 설정](#4-로컬-개발-환경-설정)
+5. [환경 변수](#5-환경-변수)
+6. [DB 초기화 및 시드 데이터](#6-db-초기화-및-시드-데이터)
+7. [API 엔드포인트](#7-api-엔드포인트)
+8. [핵심 요청/응답 예시](#8-핵심-요청응답-예시)
+9. [VRP 알고리즘 설명](#9-vrp-알고리즘-설명)
+10. [프로젝트 구조](#10-프로젝트-구조)
+11. [테스트 실행](#11-테스트-실행)
+12. [향후 구현 예정](#12-향후-구현-예정)
 
-⚖️ 법적 근거 (Legal Compliance)
-- 화물자동차 운수사업법 시행규칙 제22조(운수종사자의 준수사항) 제6호: "휴게시간 없이 2시간 연속운전한 후에는 15분 이상의 휴게시간을 가질 것"
+---
 
-📅 개발 로드맵 (Roadmap)
-- Week 1-3: 프로젝트 설계, 공공데이터(좌표) 수집 및 DB 구축
-- Week 4-8: Web/App 기본 인프라 및 TMAP 네비게이션 연동
-- Week 9-11: SH-VRP 알고리즘(HFVRP/VRPRP)·사고 위험 지수 고도화
-- Week 12: 테스트, 기능 수정(Feature Freeze), 발표 자료 준비
-- Week 13-14: 예비/본 발표
+## 1. 프로젝트 개요
 
-⚙️ 시작하기 (Quick Start)
+| 항목 | 내용 |
+|---|---|
+| 프로젝트명 | RouteOn (루트온) |
+| 목적 | 화물차 법정 휴게 규정 자동 반영 경로 최적화 |
+| 핵심 기능 | TSP 기반 경유지 순서 최적화 + 법정 휴게소 자동 삽입 |
+| 법적 근거 | 2시간(7,200초) 연속 운전 시 15분(900초) 이상 의무 휴식 |
+| 계획 임계값 | 1시간 40분(6,000초) 도달 시 선제적으로 휴게소 삽입 |
 
-사전 요구사항
-- Docker, Docker Compose
-- Python 3.10+ (로컬 실행 시)
-- Flutter SDK (frontend 개발 시)
+---
 
-레포지토리 클론
+## 2. 기술 스택
+
+| 구성 요소 | 버전 |
+|---|---|
+| Python | 3.13 |
+| FastAPI | 0.115.0 |
+| SQLAlchemy (asyncio) | 2.0.34 |
+| PostgreSQL | 16 |
+| OR-Tools | 9.15.6755 |
+| TMAP 화물차 경로 API | - |
+| Docker / Docker Compose | - |
+
+---
+
+## 3. 빠른 시작 (Docker)
+
+### 사전 요구사항
+- Docker Desktop 설치
+- TMAP App Key 발급 ([SK Open API](https://openapi.sk.com))
+
+### 실행
+
+```bash
+# 1. 저장소 클론
 git clone https://github.com/hongdydk/Capstone-ii.git
 cd Capstone-ii
 
-.env 예시 (필요 키 정의 후 저장)
-TMAP_API_KEY=your_tmap_key
-POSTGRES_USER=capstone
-POSTGRES_PASSWORD=capstone
-POSTGRES_DB=sh_vrp
-REDIS_HOST=redis
-BACKEND_HOST=0.0.0.0
-BACKEND_PORT=8000
+# 2. 환경 변수 파일 생성
+cp backend/.env.example backend/.env
+# backend/.env 파일을 열고 TMAP_APP_KEY 값을 입력
 
-Backend (Docker)
-docker-compose up --build
-헬스체크: http://localhost:8000/health
+# 3. Docker Compose 실행
+docker compose up -d
 
-Frontend Web (TMAP SDK key 비노출)
-- 프론트는 TMAP SDK를 직접 호출하지 않고 백엔드 프록시(`/tmap/vectorjs`)를 사용합니다.
-- 따라서 TMAP appKey는 `.env`의 `TMAP_REST_APPKEY`에만 저장하고, 프론트 파일에는 넣지 않습니다.
+# 4. 컨테이너 상태 확인
+docker compose ps
+```
 
-로컬 실행 예시
-1) 백엔드 실행 (Docker)
-	- `docker-compose up --build`
-2) 프론트 정적 서버 실행
-	- `python -m http.server 8001 -d frontend-web --bind 0.0.0.0`
-3) 접속
-	- 로컬: `http://localhost:8001`
-	- 같은 네트워크 사용자: `http://<내PC_IP>:8001`
+정상 실행 시:
+- API 서버: http://localhost:8000
+- Swagger UI: http://localhost:8000/docs
+- 헬스 체크: http://localhost:8000/health
 
-참고
-- 프론트가 `localhost`에서 실행되면 SDK는 기본적으로 `http://localhost:8000/tmap/vectorjs`를 사용합니다.
-- 배포 환경에서 백엔드 주소가 다르면 `frontend-web/config.js`에 `window.BACKEND_BASE_URL`을 설정하세요.
+### 중지
 
-Frontend (Flutter)
-cd frontend
-flutter pub get
-flutter run
+```bash
+docker compose down          # 컨테이너만 중지
+docker compose down -v       # 컨테이너 + DB 데이터 완전 삭제
+```
 
-개발 규칙 제안
-- Python: ruff/black/mypy, pre-commit 훅으로 포맷·린트 자동화
-- Flutter: flutter format, flutter analyze
-- 브랜치 전략: main(배포) / develop(통합) / feature/*
-- PR 체크리스트: 빌드 통과, 주요 기능 테스트, .env 키 명시 여부 확인
+---
 
-👥 팀 정보 (Team)
-- 지도교수: 민준식 교수님
-- 팀장: 홍길동 (알고리즘 및 데이터 설계)
-- 팀원: 홍길동 (백엔드 및 인프라 구축)
-- 팀원: 홍길동 (프런트엔드 및 UI/UX)
+## 4. 로컬 개발 환경 설정
+
+Docker 없이 로컬에서 직접 실행하는 경우입니다.
+
+### 사전 요구사항
+- Python 3.13
+- PostgreSQL 16 (로컬 설치 또는 Docker로 DB만 기동)
+
+```bash
+# DB만 Docker로 띄우기
+docker compose up -d db
+```
+
+### 설치 및 실행
+
+```bash
+# 1. 가상환경 생성 및 활성화
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+# 2. 패키지 설치
+pip install -r requirements.txt
+
+# 3. 환경 변수 설정
+cp backend/.env.example backend/.env
+# backend/.env 편집 → DATABASE_URL을 로컬 DB 주소로 변경
+# 예: DATABASE_URL=postgresql+asyncpg://routeon:routeon@localhost:5432/routeon
+
+# 4. 서버 실행
+cd backend
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+---
+
+## 5. 환경 변수
+
+`backend/.env` 파일에서 설정합니다. (`backend/.env.example` 참고)
+
+| 변수명 | 기본값 | 설명 |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://routeon:routeon@db:5432/routeon` | PostgreSQL 연결 URL |
+| `TMAP_APP_KEY` | _(필수 입력)_ | TMAP Open API 앱 키 |
+| `SECRET_KEY` | `CHANGE_ME_IN_PRODUCTION` | JWT 서명 키 (배포 시 변경) |
+| `DEBUG` | `false` | 디버그 모드 |
+
+> **주의**: `TMAP_APP_KEY`가 없으면 경로 최적화 API 호출 시 오류가 발생합니다.
+
+---
+
+## 6. DB 초기화 및 시드 데이터
+
+서버 최초 기동 시 `startup` 이벤트에서 테이블이 자동 생성됩니다.  
+아래 시드 스크립트로 고속도로 휴게소 및 물류단지 데이터를 초기 적재합니다.
+
+```bash
+cd backend
+
+# 휴게소(highway_rest 78건) + 물류단지(depot 56건) 시드 삽입
+python seeds/seed_rest_stops.py
+```
+
+시드 완료 후 `/rest-stops` API에서 휴게소 목록을 확인할 수 있습니다.
+
+---
+
+## 7. API 엔드포인트
+
+Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
+
+> 현재 인증 없이 모든 엔드포인트를 호출할 수 있습니다.
+
+### 경로 최적화 (핵심)
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `POST` | `/optimize/` | 단일 차량 경로 최적화 (배차) |
+| `POST` | `/optimize/replan` | 운행 중 재경로 계산 |
+| `POST` | `/optimize/dispatch` | 다수 차량 배차 (구현 예정, 501 반환) |
+
+### 마스터 데이터
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/vehicles/` | 차량 목록 조회 |
+| `POST` | `/vehicles/` | 차량 등록 |
+| `PATCH` | `/vehicles/{id}` | 차량 정보 수정 |
+| `GET` | `/drivers/` | 운전자 목록 조회 |
+| `POST` | `/drivers/` | 운전자 등록 |
+| `GET` | `/rest-stops/` | 휴게소 목록 조회 |
+| `POST` | `/rest-stops/` | 휴게소 등록 |
+| `DELETE` | `/rest-stops/{id}` | 휴게소 비활성화 |
+
+### 운행 관리
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/trips/` | 운행 목록 조회 |
+| `POST` | `/trips/` | 운행 생성 |
+| `GET` | `/trips/{id}` | 운행 상세 조회 |
+| `PATCH` | `/trips/{id}/status` | 운행 상태 변경 |
+
+---
+
+## 8. 핵심 요청/응답 예시
+
+### POST `/optimize/` — 경로 최적화
+
+**요청**
+```json
+{
+  "trip_id": 1,
+  "origin_name": "서울 물류단지",
+  "origin_lat": 37.5665,
+  "origin_lon": 126.9780,
+  "dest_name": "부산 물류단지",
+  "dest_lat": 35.1796,
+  "dest_lon": 129.0756,
+  "waypoints": [
+    {"name": "대전 창고", "lat": 36.3504, "lon": 127.3845},
+    {"name": "대구 창고", "lat": 35.8714, "lon": 128.6014}
+  ],
+  "vehicle_height_m": 4.0,
+  "vehicle_weight_kg": 25000,
+  "vehicle_length_cm": 1600,
+  "vehicle_width_cm": 250,
+  "initial_drive_sec": 0
+}
+```
+
+**응답**
+```json
+{
+  "trip_id": 1,
+  "route": [
+    {"type": "origin",      "name": "서울 물류단지", "lat": 37.5665, "lon": 126.9780},
+    {"type": "waypoint",    "name": "대전 창고",     "lat": 36.3504, "lon": 127.3845},
+    {"type": "rest_stop",   "name": "금강휴게소",    "lat": 35.9876, "lon": 127.5432,
+     "min_rest_minutes": 15},
+    {"type": "waypoint",    "name": "대구 창고",     "lat": 35.8714, "lon": 128.6014},
+    {"type": "destination", "name": "부산 물류단지", "lat": 35.1796, "lon": 129.0756}
+  ],
+  "total_distance_km": 420.5,
+  "estimated_duration_min": 327.0,
+  "rest_stops_count": 1
+}
+```
+
+### POST `/optimize/replan` — 운행 중 재경로
+
+운행 도중 정체 등으로 누적 운전시간이 늘어났을 때 호출합니다.
+
+```json
+{
+  "trip_id": 1,
+  "current_lat": 36.1234,
+  "current_lon": 127.4567,
+  "current_name": "현재위치",
+  "current_drive_sec": 5400,
+  "remaining_waypoints": [
+    {"name": "대구 창고", "lat": 35.8714, "lon": 128.6014}
+  ],
+  "dest_name": "부산 물류단지",
+  "dest_lat": 35.1796,
+  "dest_lon": 129.0756,
+  "vehicle_height_m": 4.0,
+  "vehicle_weight_kg": 25000
+}
+```
+
+### ExtraStop — 경유지/목적지/선호 휴게소 추가
+
+`extra_stops` 필드로 운전자·관리자가 실시간으로 지점을 추가할 수 있습니다.
+
+```json
+"extra_stops": [
+  {
+    "stop_type": "waypoint",
+    "name": "긴급 추가 납품처",
+    "lat": 36.0000,
+    "lon": 127.8000,
+    "note": "오전 10시 이전 도착 필요"
+  },
+  {
+    "stop_type": "rest_preferred",
+    "name": "칠원휴게소",
+    "lat": 35.2345,
+    "lon": 128.4567
+  }
+]
+```
+
+| `stop_type` | 동작 |
+|---|---|
+| `"waypoint"` | TSP 순서 최적화 대상에 포함 |
+| `"destination"` | 최종 목적지 변경 (기존 목적지는 경유지로 전환) |
+| `"rest_preferred"` | 선호 휴게소로 후보 목록 최우선 배치 |
+
+---
+
+## 9. VRP 알고리즘 설명
+
+### 주요 상수
+
+| 상수 | 값 | 설명 |
+|---|---|---|
+| `MAX_DRIVE_SEC` | 7,200초 (2시간) | 법정 최대 연속 운전 시간 |
+| `REST_PLAN_SEC` | 6,000초 (1시간 40분) | 선제적 휴게 삽입 임계값 |
+| `MIN_REST_SEC` | 900초 (15분) | 법정 최소 휴식 시간 |
+
+### 처리 흐름
+
+```
+1. ExtraStop 분류
+   └─ waypoint → 경유지 목록에 합류
+   └─ destination → 최종 목적지 교체
+   └─ rest_preferred → 휴게소 후보 맨 앞에 배치
+
+2. TMAP 화물차 API로 N×N 시간 행렬 계산
+   └─ 차량 높이/중량/길이/폭 제약 반영
+
+3. OR-Tools TSP로 경유지 방문 순서 최적화
+
+4. 최적화된 순서로 구간별 누적 운전시간 계산
+   └─ REST_PLAN_SEC(6,000초) 도달 구간에서 휴게소 삽입
+   └─ 삽입 기준: 우회 비용(prev→휴게소→next 거리) 최소화
+   └─ 1단계 lookahead: 다음 구간이 더 효율적이면 미룸
+      (단, MAX_DRIVE_SEC 초과 시 강제 삽입)
+```
+
+---
+
+## 10. 프로젝트 구조
+
+```
+Capstone-ii/
+├── docker-compose.yml          # PostgreSQL + API 서버
+├── requirements.txt            # Python 패키지 목록
+└── backend/
+    ├── Dockerfile
+    ├── .env.example            # 환경 변수 템플릿
+    ├── app/
+    │   ├── main.py             # FastAPI 앱 진입점
+    │   ├── api/
+    │   │   ├── deps.py         # DB 의존성
+    │   │   └── routes/
+    │   │       ├── optimize.py # ★ 핵심: 경로 최적화 API
+    │   │       ├── trips.py    # 운행 관리
+    │   │       ├── vehicles.py # 차량 관리
+    │   │       ├── drivers.py  # 운전자 관리
+    │   │       ├── rest_stops.py # 휴게소 관리
+    │   │       └── auth.py     # 인증 (현재 미사용)
+    │   ├── services/
+    │   │   ├── route_optimizer.py  # ★ VRP 엔진 (OR-Tools)
+    │   │   └── tmap_service.py     # TMAP 화물차 경로 API
+    │   ├── models/             # SQLAlchemy ORM 모델
+    │   ├── schemas/            # Pydantic 요청/응답 스키마
+    │   └── core/
+    │       ├── config.py       # 환경 변수 설정
+    │       └── database.py     # DB 연결 설정
+    ├── seeds/
+    │   └── seed_rest_stops.py  # 휴게소·물류단지 초기 데이터
+    └── tests/
+        └── test_route_optimizer.py  # 단위 테스트 (17개)
+```
+
+---
+
+## 11. 테스트 실행
+
+```bash
+cd c:\Capstone-ii   # 또는 프로젝트 루트
+
+# 전체 테스트 실행
+.venv\Scripts\python.exe -m pytest backend/tests/ -v
+
+# 예상 결과
+# ======================= 17 passed in ~15s =======================
+```
+
+실제 TMAP API 호출 없이 순수 알고리즘(거리 행렬 모킹)만 테스트합니다.
+
+---
+
+## 12. 향후 구현 예정
+
+| 기능 | 설명 |
+|---|---|
+| 다수 차량 배차 (CVRP) | `POST /optimize/dispatch` — OR-Tools CVRP로 여러 차량에 경유지 분배 |
+| 인증 복원 | `auth.py` 기반 JWT 인증을 엔드포인트에 재적용 |
+
+---
+
+## 역할 분담
+
+| 이름 | 담당 |
+|---|---|
+| 홍요아 | 경로 최적화 엔진, 규정 로직, 총괄 |
+| 신우철 | 운전자 앱, 관리자 웹 |
+| 이어진 | API 서버, DB 스키마, Docker 인프라 |
+
+
+## 1. 프로젝트 개요
+- 프로젝트명: 루트온(RouteOn)
+- 작품분야: 웹, 모바일
+- 주제: 화물차 사고 예방 및 법적 휴게 규정 준수를 위한 실시간 안전 운행 지원 시스템
+
+## 2. 작품 배경
+화물차는 차량 중량과 크기로 인해 사고 시 인명 피해가 큰 편이며, 장거리 운행 비중이 높아 운전자 피로 관리가 중요합니다.
+현장에서는 법정 휴게시간을 운전자가 직접 계산하고 휴게 가능 지점을 찾아야 해서 규정 준수가 어렵습니다.
+
+## 3. 실용성 근거
+- 경로 내 휴게 지점 사전 배치로 운행 중 탐색 시간 감소
+- 운행 상태 자동 판정으로 법규 준수율 향상
+- 축적 데이터 기반 보험 협의 및 운송사 평가 활용 가능
+
+## 4. 시장 추세
+- ESG 확산으로 물류 안전 관리 및 법규 대응 수요 증가
+- 화물차 높이/중량 제약을 반영하는 전용 경로 서비스 필요 확대
+- 최적화 알고리즘과 실시간 데이터 결합형 솔루션 확산
+
+## 5. 작품 주제 및 구현 방향
+본 프로젝트는 운전자 앱(Flutter), 관리자 웹, 서버(FastAPI), 최적화 엔진(OR-Tools)으로 구성된 3단 구조입니다.
+실시간 GPS 데이터를 바탕으로 운행 상태를 판정하고, 법정 휴게 규정을 반영한 경로를 안내합니다.
+
+## 6. 작품 목표
+1. 제약 조건 반영 경로 최적화
+- 도로/차량 제약(높이, 중량)과 법정 휴게 규정(2시간 운전 시 15분 휴식) 반영
+
+2. 운행 상태 판정 및 안내 체계 구축
+- GPS 노이즈 필터링과 지오펜싱 기반 판정
+- 정체와 유효 휴식을 구분해 오탐 경고 최소화
+
+3. Docker 기반 독립 서버 운영
+- 백엔드/DB 분리 구성으로 안정적인 배포 및 운영
+
+## 7. 기술 분석
+### 7.1 VRP 기반 경로 최적화
+- Google OR-Tools로 시간/제약 조건 포함 차량 경로 모델링
+- 실제 도로 제약과 시간 제약을 함께 반영
+
+### 7.2 휴식 판정 알고리즘
+- 지정 POI(휴게소, 졸음쉼터, 차고지) 중심으로 유효 휴식 판정
+- 정체 구간 정지는 휴식으로 오인하지 않도록 상태 머신 적용
+- 이동평균 및 임계속도 필터로 GPS 노이즈 보정
+
+## 8. 시스템 구조
+- Front-End: Flutter 앱, 웹 대시보드
+- Back-End: FastAPI (Python)
+- Database: PostgreSQL
+- External API: TMAP API
+
+데이터 흐름:
+1. 배차 단계: 관리자 목적지 입력 후 서버가 최적 동선 계산
+2. 운행 단계: GPS 실시간 전송, 운행/휴식 상태 갱신
+3. 기록 단계: 운행 종료 후 리포트 자동 생성
+
+## 9. 구현 환경
+- 백엔드: Python, FastAPI
+- 최적화: Google OR-Tools
+- 프론트엔드: Flutter / Dart /Node.js
+- DB: PostgreSQL
+- 인프라: Docker
+
+## 10. 사용자 시나리오
+- 관리자: 웹 대시보드에서 차량 위치/휴식 상태를 통합 모니터링
+- 운전자: 앱에서 경로 및 추천 휴게소 확인, 휴식 기록 수행
+
+## 11. 프로젝트 독창성
+- 사후 점검 중심이 아닌 사전 예방형 운행 지원
+- 규정 준수와 사용자 자율 선택을 함께 보장하는 설계
+
+## 12. 향후 발전 방향
+- 운전자별 안전 지수 모델 도입
+- 날씨/사고/주차 데이터 연동으로 휴게 추천 고도화
+
+## 13. 역할 분담
+- 홍요아: 경로 최적화, 규정 로직, 총괄
+- 신우철: 운전자 앱/백그라운드 수집, 관리자 웹
+- 이어진: API 서버, DB 스키마/인덱싱, Docker 인프라
+
+## 14. 개발 일정(요약)
+- 1~4주: 분석/설계
+- 5~8주: 알고리즘 및 API 서버 환경 구축
+- 9~12주: 앱/웹 개발, GPS 수집·전송
+- 13~14주: 연동 테스트 및 알고리즘 보정
+- 15주: 배포 및 통합 테스트 발표
