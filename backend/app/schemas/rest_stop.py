@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from pydantic import BaseModel
 
 from app.models.rest_stop import RestStopType
@@ -10,23 +8,20 @@ class RestStopCreate(BaseModel):
     type: RestStopType
     latitude: float
     longitude: float
+    direction: str | None = None
+    scope: str = "private"
+    note: str | None = None
 
 
-class RestStopUpdate(BaseModel):
-    name: str | None = None
-    type: RestStopType | None = None
-    latitude: float | None = None
-    longitude: float | None = None
-    is_active: bool | None = None
-
-
-class RestStopResponse(BaseModel):
+class RestStopRead(BaseModel):
     id: int
     name: str
     type: RestStopType
     latitude: float
     longitude: float
     is_active: bool
-    created_at: datetime
+    direction: str | None
+    scope: str
+    note: str | None
 
     model_config = {"from_attributes": True}

@@ -1,7 +1,7 @@
 # RouteOn — 화물차 경로 최적화 API 서버
 
-화물차 법정 휴게 규정(2시간 운전 시 15분 휴식)을 자동으로 반영하여  
-OR-Tools + TMAP 화물차 전용 API로 최적 동선을 계산하는 VRP 엔진입니다.
+화물차 법정 휴게 규정(2시간 운전 시 15분 휴식 천재지변이나 교통정체시 추가 1시간 운행이 되지만 30분 휴식)을 자동으로 반영하여  
+OR-Tools로 최적 동선을 계산하는 VRP 엔진입니다.
 
 ---
 
@@ -45,8 +45,6 @@ OR-Tools + TMAP 화물차 전용 API로 최적 동선을 계산하는 VRP 엔진
 | SQLAlchemy (asyncio) | 2.0.34 |
 | PostgreSQL | 16 |
 | OR-Tools | 9.15.6755 |
-| TMAP 화물차 경로 API | `/tmap/truck/routes` (실시간) |
-| TMAP 타임머신 API | `/tmap/routes/prediction` (출발 예정 시각 기반 예측 교통) |
 | Docker / Docker Compose | - |
 
 ---
@@ -55,7 +53,6 @@ OR-Tools + TMAP 화물차 전용 API로 최적 동선을 계산하는 VRP 엔진
 
 ### 사전 요구사항
 - Docker Desktop 설치
-- TMAP App Key 발급 ([SK Open API](https://openapi.sk.com))
 
 ### 실행
 
@@ -66,7 +63,6 @@ cd Capstone-ii
 
 # 2. 환경 변수 파일 생성
 cp backend/.env.example backend/.env
-# backend/.env 파일을 열고 TMAP_APP_KEY 값을 입력
 
 # 3. Docker Compose 실행
 docker compose up -d
@@ -135,11 +131,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 | 변수명 | 기본값 | 설명 |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://routeon:routeon@db:5432/routeon` | PostgreSQL 연결 URL |
-| `TMAP_APP_KEY` | _(필수 입력)_ | TMAP Open API 앱 키 |
 | `SECRET_KEY` | `CHANGE_ME_IN_PRODUCTION` | JWT 서명 키 (배포 시 변경) |
 | `DEBUG` | `false` | 디버그 모드 |
 
-> **주의**: `TMAP_APP_KEY`가 없으면 경로 최적화 API 호출 시 오류가 발생합니다.
+
 
 ---
 
@@ -233,9 +228,6 @@ Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
   "departure_time": "2026-03-26T08:00:00+0900"
 }
 ```
-
-> `departure_time` 입력 시 TMAP 타임머신 API(`/tmap/routes/prediction`)를 사용하여  
-> 실제 출발 예정 시각의 교통 상황을 반영한 시간 행렬을 계산합니다.
 
 ---
 
@@ -351,16 +343,6 @@ Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
 | `REST_PLAN_SEC` | 6,000초 (1시간 40분) | 선제적 휴게 삽입 임계값 |
 | `MIN_REST_SEC` | 900초 (15분) | 법정 최소 휴식 시간 |
 
-### TMAP API 선택 기준
-
-| 조건 | 사용 API | 설명 |
-|---|---|---|
-| `departure_time` 없음 | `POST /tmap/truck/routes` | 실시간 교통 반영 화물차 경로 |
-| `departure_time` 있음 | `POST /tmap/routes/prediction` | 출발 예정 시각의 예측 교통 반영 (타임머신) |
-
-타임머신 API는 `searchOption: "17"` (화물차 전용), `predictionType: "arrival"` 모드로 호출되며  
-차량 높이·중량·길이·폭 제약이 동일하게 적용됩니다.
-
 ### 처리 흐름
 
 ```
@@ -369,8 +351,7 @@ Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
    └─ destination → 최종 목적지 교체
    └─ rest_preferred → 휴게소 후보 맨 앞에 배치
 
-2. TMAP 화물차 API로 N×N 시간 행렬 계산
-   └─ departure_time 있으면 타임머신 API, 없으면 실시간 API
+2. 외부 라우팅 API로 N×N 시간 행렬 계산
    └─ 차량 높이/중량/길이/폭 제약 반영
 
 3. OR-Tools TSP로 경유지 방문 순서 최적화
@@ -388,34 +369,53 @@ Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
 
 ```
 Capstone-ii/
-├── docker-compose.yml          # PostgreSQL + API 서버
-├── requirements.txt            # Python 패키지 목록
+├── ReadMe.md                          ← 프로젝트 전체 문서
+├── SCHEMA.md                          ← DB 테이블 정의 (ERD 대체)
+├── 자료/
+│   ├── 한국도로공사_졸음쉼터_20260225.csv  ← 고속도로 졸음쉼터 원본 데이터 (EUC-KR)
+│   └── Rest.txt                       ← 휴게소 참고 메모
 └── backend/
-    ├── Dockerfile
-    ├── .env.example            # 환경 변수 템플릿
+    ├── .env.example                   ← 환경 변수 템플릿
+    ├── requirements.txt               ← Python 패키지 목록
     ├── app/
-    │   ├── main.py             # FastAPI 앱 진입점
-    │   ├── api/
-    │   │   ├── deps.py         # DB 의존성
-    │   │   └── routes/
-    │   │       ├── optimize.py # ★ 핵심: 경로 최적화 API
-    │   │       ├── trips.py    # 운행 관리
-    │   │       ├── vehicles.py # 차량 관리
-    │   │       ├── drivers.py  # 운전자 관리
-    │   │       ├── rest_stops.py # 휴게소 관리
-    │   │       └── auth.py     # 인증 (현재 미사용)
-    │   ├── services/
-    │   │   ├── route_optimizer.py  # ★ VRP 엔진 (OR-Tools)
-    │   │   └── tmap_service.py     # TMAP 화물차 경로 API
-    │   ├── models/             # SQLAlchemy ORM 모델
-    │   ├── schemas/            # Pydantic 요청/응답 스키마
-    │   └── core/
-    │       ├── config.py       # 환경 변수 설정
-    │       └── database.py     # DB 연결 설정
+    │   ├── __init__.py
+    │   ├── main.py                    ← FastAPI 앱 진입점, lifespan·라우터 등록
+    │   ├── api/                       ← HTTP 엔드포인트 (라우터)
+    │   │   ├── __init__.py
+    │   │   ├── optimize.py            ← POST /optimize/, /replan, /dispatch
+    │   │   ├── vehicles.py            ← GET/POST /vehicles/, PATCH /vehicles/{id}
+    │   │   ├── drivers.py             ← GET/POST /drivers/
+    │   │   ├── rest_stops.py          ← GET/POST /rest-stops/, DELETE /rest-stops/{id}
+    │   │   └── trips.py               ← GET/POST /trips/, GET/PATCH /trips/{id}/status
+    │   ├── core/                      ← 앱 공통 설정
+    │   │   ├── __init__.py
+    │   │   ├── config.py              ← pydantic-settings (DATABASE_URL 등)
+    │   │   └── database.py            ← AsyncEngine 생성, get_db 의존성 함수
+    │   ├── models/                    ← SQLAlchemy ORM 모델 (SCHEMA.md 1:1 매핑)
+    │   │   ├── __init__.py
+    │   │   ├── user.py                ← users 테이블
+    │   │   ├── driver.py              ← drivers 테이블
+    │   │   ├── vehicle.py             ← vehicles 테이블
+    │   │   ├── trip.py                ← trips 테이블 (optimized_route JSONB 포함)
+    │   │   ├── rest_stop.py           ← rest_stops 테이블 (졸음쉼터·휴게소)
+    │   │   └── location_log.py        ← location_logs 테이블 (기사 위치 이력)
+    │   ├── schemas/                   ← Pydantic 입출력 스키마 (요청·응답 직렬화)
+    │   │   ├── __init__.py
+    │   │   ├── optimize.py            ← OptimizeRequest/Response, RouteNodeSchema
+    │   │   ├── vehicle.py             ← VehicleCreate / VehicleRead
+    │   │   ├── driver.py              ← DriverCreate / DriverRead
+    │   │   ├── trip.py                ← TripCreate / TripRead
+    │   │   └── rest_stop.py           ← RestStopCreate / RestStopRead
+    │   └── services/                  ← 비즈니스 로직 (라우터에서 호출)
+    │       ├── __init__.py
+    │       ├── kakao.py               ← Kakao Mobility API 연동, N×N 시간 행렬 계산
+    │       ├── optimizer.py           ← OR-Tools TSP (출발지·목적지 depot 고정)
+    │       └── rest_stop_inserter.py  ← 6,000초 임계값 기반 휴게소 자동 삽입
     ├── seeds/
-    │   └── seed_rest_stops.py  # 휴게소·물류단지 초기 데이터
+    │   ├── init_tables.sql            ← ENUM 타입 + 전체 DDL (수동 실행용)
+    │   └── seed_rest_stops.py         ← 졸음쉼터 CSV(EUC-KR) → DB 일괄 삽입
     └── tests/
-        └── test_route_optimizer.py  # 단위 테스트 (17개)
+        └── __init__.py                ← pytest 테스트 패키지
 ```
 
 ---
@@ -432,7 +432,7 @@ cd c:\Capstone-ii   # 또는 프로젝트 루트
 # ======================= 17 passed in ~15s =======================
 ```
 
-실제 TMAP API 호출 없이 순수 알고리즘(거리 행렬 모킹)만 테스트합니다.
+순수 알고리즘(거리 행렬 모킹)만 테스트합니다.
 
 ---
 
@@ -442,7 +442,7 @@ cd c:\Capstone-ii   # 또는 프로젝트 루트
 |---|---|
 | 다수 차량 배차 (CVRP) | `POST /optimize/dispatch` — OR-Tools CVRP로 여러 차량에 경유지 분배 |
 | 인증 복원 | `auth.py` 기반 JWT 인증을 엔드포인트에 재적용 |
-| 하이브리드 라우팅 | 단거리(< 50 km) Haversine, 장거리(≥ 50 km) TMAP으로 API 호출 절감 |
+| 하이브리드 라우팅 | 단거리(< 50 km) Haversine, 장거리(≥ 50 km) 외부 라우팅 API로 호출 절감 |
 
 ---
 

@@ -1,36 +1,41 @@
 import enum
-from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import Enum, Float, ForeignKey, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Enum as SAEnum, Float, ForeignKey, Integer
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import func
+from sqlalchemy import DateTime
 
-from .base import Base, TimestampMixin
+from app.core.database import Base
 
 
 class DrivingState(str, enum.Enum):
-    DRIVING      = "driving"
-    RESTING      = "resting"
-    TRAFFIC_STOP = "traffic_stop"
-    UNKNOWN      = "unknown"
+    driving = "driving"
+    resting = "resting"
+    traffic_stop = "traffic_stop"
+    unknown = "unknown"
 
 
-class LocationLog(TimestampMixin, Base):
-    """운행 중 위치 로그 — GPS 좌표, 속도, 운전 상태를 시계열로 기록합니다."""
-
+class LocationLog(Base):
     __tablename__ = "location_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     trip_id: Mapped[int] = mapped_column(
-        ForeignKey("trips.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("trips.id", ondelete="CASCADE"), nullable=False
     )
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
-    speed_kmh: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    speed_kmh: Mapped[float | None] = mapped_column(Float)
     state: Mapped[DrivingState] = mapped_column(
-        Enum(DrivingState, name="drivingstate"), default=DrivingState.UNKNOWN, nullable=False
+        SAEnum(DrivingState, name="drivingstate"),
+        nullable=False,
+        default=DrivingState.unknown,
     )
-    recorded_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
-
-    # relationships
-    trip: Mapped["Trip"] = relationship("Trip", back_populates="location_logs")  # noqa: F821
+    recorded_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
