@@ -58,29 +58,32 @@ def _pick_best_rest(
     return best
 
 
-def insert_rest_stops(
+async def insert_rest_stops(
     ordered_nodes: list[RouteNode],
     time_matrix: list[list[int]],
     rest_candidates: list[dict],
     initial_drive_sec: int = 0,
     is_emergency: bool = False,
+    picker=None,
 ) -> list[RouteNode]:
     """
     TSP 정렬된 노드 목록에 법정 휴게소를 삽입합니다.
 
     흐름:
     1. 구간별 누적 운전 시간 계산
-    2. REST_PLAN_SEC 도달 시 우회 비용 최소 휴게소 삽입
+    2. REST_PLAN_SEC 도달 시 picker 또는 Haversine으로 최적 휴게소 삽입
     3. 긴급 예외(is_emergency=True) 시 MAX_DRIVE_SEC + EMERGENCY_EXTEND_SEC 까지
        허용하고, 삽입 시 EMERGENCY_REST_MIN(30분) 적용
 
     Args:
         ordered_nodes    : TSP 결과 순서 (출발지 포함 + 목적지 포함)
-        time_matrix      : ordered_nodes 인덱스 기준 N×N 시간 행렬
+        time_matrix      : ordered_nodes 인덱스 기준 NxN 시간 행렬
         rest_candidates  : DB에서 조회한 active 휴게소 목록
         initial_drive_sec: 현재 누적 운전 시간 (replan 시 전달)
         is_emergency     : 교통정체·사고 등 불가피한 사유로 긴급 예외 적용 여부
                            (화물자동차 운수사업법 시행규칙 [별표3] 다항)
+        picker           : async (prev, nxt, candidates) -> dict | None
+                           None이면 Haversine 기반 _pick_best_rest 사용
     """
     # 긴급 예외 여부에 따라 임계값·휴식시간 결정
     plan_threshold = REST_PLAN_SEC
@@ -98,7 +101,10 @@ def insert_rest_stops(
         seg_time = time_matrix[i][i + 1]
 
         if accumulated + seg_time >= plan_threshold:
-            best = _pick_best_rest(ordered_nodes[i], ordered_nodes[i + 1], rest_candidates)
+            if picker is not None:
+                best = await picker(ordered_nodes[i], ordered_nodes[i + 1], rest_candidates)
+            else:
+                best = _pick_best_rest(ordered_nodes[i], ordered_nodes[i + 1], rest_candidates)
             if best:
                 result.append(
                     RouteNode(

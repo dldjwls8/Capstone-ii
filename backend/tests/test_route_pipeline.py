@@ -2,6 +2,7 @@
 경로 최적화 파이프라인 통합 테스트
 TSP 순서 최적화(optimizer) → 휴게소 삽입(rest_stop_inserter) 전 구간 검증
 """
+import asyncio
 import pytest
 from app.services.optimizer import solve_tsp
 from app.services.rest_stop_inserter import (
@@ -58,13 +59,14 @@ def _run_pipeline(
         for i in range(n)
     ]
 
-    return insert_rest_stops(
+    return asyncio.run(insert_rest_stops(
         ordered,
         reordered_matrix,
         rest_candidates,
         initial_drive_sec=initial_drive_sec,
         is_emergency=is_emergency,
-    )
+        # picker=None → Haversine 사용 (테스트는 API 불필요)
+    ))
 
 
 REST_CANDIDATES = [

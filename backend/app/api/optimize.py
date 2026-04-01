@@ -134,11 +134,12 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
         for r in rest_stops_db
     ]
 
-    final_route = insert_rest_stops(
+    final_route = await insert_rest_stops(
         ordered_nodes,
         final_matrix,
         rest_candidates,
         initial_drive_sec=req.initial_drive_sec,
+        picker=kakao_svc.find_best_rest_stop,
     )
 
     # ------------------------------------------------------------------
@@ -224,10 +225,11 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
     final_matrix = [[time_matrix[tsp_order[i]][tsp_order[j]] if i < len(tsp_order) and j < len(tsp_order) else 0
                       for j in range(n)] for i in range(n)]
 
-    final_route = insert_rest_stops(
+    final_route = await insert_rest_stops(
         ordered_nodes, final_matrix, rest_stops_db,
         initial_drive_sec=req.current_drive_sec,
         is_emergency=req.is_emergency,
+        picker=kakao_svc.find_best_rest_stop,
     )
 
     rest_count = sum(1 for nd in final_route if nd.type == "rest_stop")
