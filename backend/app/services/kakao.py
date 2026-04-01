@@ -30,8 +30,8 @@ async def _get_route_time_future(
     dest_lon: float,
     *,
     departure_time: str,
-) -> int:
-    """미래 운행 정보 길찾기 API로 두 지점 간 소요 시간(초)을 반환합니다."""
+) -> tuple[int, int]:
+    """미래 운행 정보 길찾기 API로 두 지점 간 소요 시간(초)·거리(m)를 반환합니다."""
     # departure_time 형식: ISO-8601 → YYYYMMDDHHMM (12자리, API 스펙)
     try:
         dt = datetime.fromisoformat(departure_time)
@@ -183,7 +183,7 @@ async def build_time_matrix(
     matrix: list[list[int]] = [[0] * n for _ in range(n)]
     dist_matrix: list[list[int]] = [[0] * n for _ in range(n)]
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
         if departure_time:
             # 미래 교통 반영 — 두 모드 공통으로 개별 호출 (N²-N 회)
             async def fetch_future(i: int, j: int) -> tuple[int, int, int, int]:
@@ -295,7 +295,7 @@ async def find_best_rest_stop(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
             for start in range(0, len(filtered), _BATCH):
                 batch = filtered[start : start + _BATCH]
                 indices = list(range(start, start + len(batch)))
