@@ -11,6 +11,10 @@ MIN_REST_MIN: int  = 15       # 법정 최소 휴식 시간 (분)
 EMERGENCY_EXTEND_SEC: int = 3_600   # 1시간 연장 허용 → 최대 연속 운전 10,800초(3시간)
 EMERGENCY_REST_MIN: int   = 30      # 긴급 연장 사용 시 의무 휴식 시간 (분, 일반 15분의 2배)
 
+# Kakao API가 경로를 찾지 못한 구간에 부여하는 대체값 (kakao.py 와 동일)
+# 이 값이 행렬에 들어온 구간은 실제 이동이 불가능하므로 누적 운전시간 계산에서 제외
+_UNREACHABLE_SEC: int = 10_800_000
+
 
 @dataclass
 class RouteNode:
@@ -99,6 +103,10 @@ async def insert_rest_stops(
     for i in range(len(ordered_nodes) - 1):
         result.append(ordered_nodes[i])
         seg_time = time_matrix[i][i + 1]
+
+        # API 미반환 구간(_UNREACHABLE_SEC)은 실제 이동이 없으므로 누적에서 제외
+        if seg_time >= _UNREACHABLE_SEC:
+            continue
 
         if accumulated + seg_time >= plan_threshold:
             if picker is not None:

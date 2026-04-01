@@ -30,8 +30,12 @@ async def _get_route_time_future(
     dest_lon: float,
     *,
     departure_time: str,
+    car_type: int = 4,
 ) -> tuple[int, int]:
-    """미래 운행 정보 길찾기 API로 두 지점 간 소요 시간(초)·거리(m)를 반환합니다."""
+    """미래 운행 정보 길찾기 API로 두 지점 간 소요 시간(초)·거리(m)를 반환합니다.
+
+    car_type: 1=소형 2=중형 3=대형 4=대형화물(기본) 5=특수화물 6=경차 7=이륜차
+    """
     # departure_time 형식: ISO-8601 → YYYYMMDDHHMM (12자리, API 스펙)
     try:
         dt = datetime.fromisoformat(departure_time)
@@ -40,7 +44,7 @@ async def _get_route_time_future(
         dt_str = departure_time[:12]  # 이미 올바른 포맷이면 앞 12자리만 사용
 
     cache_key = (round(origin_lat, 5), round(origin_lon, 5),
-                 round(dest_lat, 5),   round(dest_lon, 5), dt_str)
+                 round(dest_lat, 5),   round(dest_lon, 5), dt_str, car_type)
     if cache_key in _cache_future:
         return _cache_future[cache_key]
 
@@ -54,13 +58,19 @@ async def _get_route_time_future(
             "origin": f"{origin_lon},{origin_lat}",
             "destination": f"{dest_lon},{dest_lat}",
             "departure_time": dt_str,
+            "car_type": car_type,
             "summary": "true",
         },
         headers=headers,
     )
     resp.raise_for_status()
-    summary = resp.json()["routes"][0]["summary"]
-    result = (int(summary["duration"]), int(summary["distance"]))
+    route = resp.json()["routes"][0]
+    # result_code 0 = 성공, 그 외 = 경로 탐색 실패 (reference: result_code 표 참고)
+    if route.get("result_code", -1) != 0:
+        result = (_UNREACHABLE_SEC, 0)
+    else:
+        summary = route["summary"]
+        result = (int(summary["duration"]), int(summary["distance"]))
     _cache_future[cache_key] = result
     return result
 
@@ -71,10 +81,14 @@ async def _get_route_time_realtime(
     origin_lon: float,
     dest_lat: float,
     dest_lon: float,
+    car_type: int = 4,
 ) -> tuple[int, int]:
-    """자동차 길찾기 API로 두 지점 간 실시간 소요 시간(초)·거리(m)를 반환합니다."""
+    """자동차 길찾기 API로 두 지점 간 실시간 소요 시간(초)·거리(m)를 반환합니다.
+
+    car_type: 1=소형 2=중형 3=대형 4=대형화물(기본) 5=특수화물 6=경차 7=이륜차
+    """
     cache_key = (round(origin_lat, 5), round(origin_lon, 5),
-                 round(dest_lat, 5),   round(dest_lon, 5))
+                 round(dest_lat, 5),   round(dest_lon, 5), car_type)
     if cache_key in _cache_realtime:
         return _cache_realtime[cache_key]
 
@@ -87,13 +101,19 @@ async def _get_route_time_realtime(
         params={
             "origin": f"{origin_lon},{origin_lat}",
             "destination": f"{dest_lon},{dest_lat}",
+            "car_type": car_type,
             "summary": "true",
         },
         headers=headers,
     )
     resp.raise_for_status()
-    summary = resp.json()["routes"][0]["summary"]
-    result = (int(summary["duration"]), int(summary["distance"]))
+    route = resp.json()["routes"][0]
+    # result_code 0 = 성공, 그 외 = 경로 탐색 실패 (reference: result_code 표 참고)
+    if route.get("result_code", -1) != 0:
+        result = (_UNREACHABLE_SEC, 0)
+    else:
+        summary = route["summary"]
+        result = (int(summary["duration"]), int(summary["distance"]))
     _cache_realtime[cache_key] = result
     return result
 
@@ -162,7 +182,8 @@ async def build_time_matrix(
     *,
     route_mode: Literal["local", "long_distance"] = "long_distance",
     departure_time: str | None = None,
-    # Kakao는 차량 제원 파라미터를 지원하지 않으므로 서명 호환용으로만 유지
+    car_type: int = 4,
+    # 차량 제원 파라미터 — Kakao API 미지원, 서명 호환용
     height_m: float | None = None,
     weight_kg: float | None = None,
     length_cm: float | None = None,
@@ -192,6 +213,7 @@ async def build_time_matrix(
                     nodes[i]["lat"], nodes[i]["lon"],
                     nodes[j]["lat"], nodes[j]["lon"],
                     departure_time=departure_time,
+                    car_type=car_type,
                 )
                 return i, j, dur, dist
 
@@ -202,6 +224,7 @@ async def build_time_matrix(
 
         elif route_mode == "local":
             # 지역 배송 — 다중 목적지 API로 행(row) 단위 일괄 조회 (N회 호출)
+            # 다중 목적지 API는 car_type 미지원 — 개별 실시간 호출로 fallback
             async def fetch_row(i: int) -> tuple[int, list[tuple[int, int, int]]]:
                 dest_indices = [j for j in range(n) if j != i]
                 dest_nodes = [nodes[j] for j in dest_indices]
@@ -223,6 +246,7 @@ async def build_time_matrix(
                     client,
                     nodes[i]["lat"], nodes[i]["lon"],
                     nodes[j]["lat"], nodes[j]["lon"],
+                    car_type=car_type,
                 )
                 return i, j, dur, dist
 
@@ -318,3 +342,71 @@ async def find_best_rest_stop(
 
     best_idx = min(times, key=lambda i: times[i][0] + times[i][1])
     return filtered[best_idx]
+
+
+# Kakao 로컬 API — 장소 카테고리 검색
+_KAKAO_LOCAL_BASE = "https://dapi.kakao.com/v2/local/search/category.json"
+
+# 검색할 카테고리 코드 (지역 배송 휴게 적합)
+# PK6=주차장, CE7=카페, CS2=편의점
+_LOCAL_REST_CATEGORIES = ["PK6", "CE7", "CS2"]
+
+_cache_local_search: TTLCache = TTLCache(maxsize=200, ttl=3_600)
+
+
+async def search_local_rest_candidates(
+    center_lat: float,
+    center_lon: float,
+    radius_m: int = 2_000,
+    categories: list[str] | None = None,
+    max_per_category: int = 5,
+) -> list[dict]:
+    """
+    Kakao 로컬 카테고리 검색 API로 지역 배송 구간 주변 휴게 후보를 검색합니다.
+
+    Args:
+        center_lat      : 검색 중심 위도
+        center_lon      : 검색 중심 경도
+        radius_m        : 검색 반경(m), 최대 20,000
+        categories      : 검색할 카테고리 코드 목록. None이면 기본 3종(주차장·카페·편의점)
+        max_per_category: 카테고리별 최대 반환 개수
+
+    Returns:
+        [{"name": ..., "latitude": ..., "longitude": ..., "category": ..., "is_active": True}, ...]
+    """
+    cats = categories or _LOCAL_REST_CATEGORIES
+    cache_key = (round(center_lat, 4), round(center_lon, 4), radius_m, tuple(cats))
+    if cache_key in _cache_local_search:
+        return _cache_local_search[cache_key]
+
+    headers = {"Authorization": f"KakaoAK {settings.KAKAO_API_KEY}"}
+    results: list[dict] = []
+
+    async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        for cat in cats:
+            params = {
+                "category_group_code": cat,
+                "x": str(center_lon),
+                "y": str(center_lat),
+                "radius": str(radius_m),
+                "size": str(max_per_category),
+                "sort": "distance",
+            }
+            try:
+                resp = await client.get(_KAKAO_LOCAL_BASE, headers=headers, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                for doc in data.get("documents", []):
+                    results.append({
+                        "name":      doc.get("place_name", ""),
+                        "latitude":  float(doc.get("y", 0)),
+                        "longitude": float(doc.get("x", 0)),
+                        "category":  doc.get("category_group_name", cat),
+                        "address":   doc.get("road_address_name") or doc.get("address_name", ""),
+                        "is_active": True,
+                    })
+            except Exception:
+                continue  # 카테고리별 실패 시 나머지 계속
+
+    _cache_local_search[cache_key] = results
+    return results

@@ -64,6 +64,17 @@ def _load_rest_candidates() -> list[dict]:
 
 REST_CANDIDATES: list[dict] = _load_rest_candidates()
 
+# ── 지역 배송용 도심 휴게 후보 ───────────────────────────────────────────────
+# 고속도로 졸음쉼터는 지역 배송과 무관 → 도심 주요 주차·휴게 거점 사용
+# (RestStop.type = 'custom', scope = 'public' 에 해당)
+LOCAL_REST_CANDIDATES: list[dict] = [
+    {"name": "강남구청 공영주차장",  "latitude": 37.5172, "longitude": 127.0473, "is_active": True},
+    {"name": "송파구청 인근 휴게소", "latitude": 37.5148, "longitude": 127.1059, "is_active": True},
+    {"name": "마포구청 공영주차장",  "latitude": 37.5663, "longitude": 126.9014, "is_active": True},
+    {"name": "영등포구청 주차장",    "latitude": 37.5260, "longitude": 126.8963, "is_active": True},
+    {"name": "성동구청 주차장",      "latitude": 37.5635, "longitude": 127.0365, "is_active": True},
+]
+
 # ── 출력 헬퍼 ────────────────────────────────────────────────────────────────
 
 def fmt_time(sec: int) -> str:
