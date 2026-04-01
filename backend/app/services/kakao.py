@@ -267,6 +267,33 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * atan2(sqrt(a), sqrt(1 - a))
 
 
+# 자동 모드 전환 임계값 (km) — 노드 간 최대 직선 거리가 이 값 미만이면 local 모드로 전환
+_AUTO_LOCAL_THRESHOLD_KM: float = 50.0
+
+
+def auto_detect_route_mode(nodes: list[dict]) -> str:
+    """노드 목록의 최대 쌍별 Haversine 거리를 기준으로 route_mode를 자동 결정합니다.
+
+    - 모든 노드 쌍의 직선 거리가 _AUTO_LOCAL_THRESHOLD_KM(50km) 미만이면 'local'
+    - 하나라도 50km 이상이면 'long_distance'
+
+    Args:
+        nodes: [{'lat': float, 'lon': float, ...}, ...]
+
+    Returns:
+        'local' 또는 'long_distance'
+    """
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            dist = _haversine_km(
+                nodes[i]["lat"], nodes[i]["lon"],
+                nodes[j]["lat"], nodes[j]["lon"],
+            )
+            if dist >= _AUTO_LOCAL_THRESHOLD_KM:
+                return "long_distance"
+    return "local"
+
+
 async def find_best_rest_stop(
     prev: Any,
     nxt: Any,

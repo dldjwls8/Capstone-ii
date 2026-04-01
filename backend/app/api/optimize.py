@@ -75,9 +75,14 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     # ------------------------------------------------------------------
     # 2. Kakao NxN 시간·거리 행렬 계산
     # ------------------------------------------------------------------
+    resolved_mode = (
+        kakao_svc.auto_detect_route_mode(nodes)
+        if req.route_mode == "auto"
+        else req.route_mode
+    )
     time_matrix, dist_matrix = await kakao_svc.build_time_matrix(
         nodes,
-        route_mode=req.route_mode,
+        route_mode=resolved_mode,
         departure_time=trip.departure_time,
         **veh,
     )
@@ -188,7 +193,12 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
         "width_cm": req.vehicle_width_cm or trip.vehicle_width_cm,
     }
 
-    time_matrix, dist_matrix = await kakao_svc.build_time_matrix(nodes, route_mode=req.route_mode, **veh)
+    resolved_mode = (
+        kakao_svc.auto_detect_route_mode(nodes)
+        if req.route_mode == "auto"
+        else req.route_mode
+    )
+    time_matrix, dist_matrix = await kakao_svc.build_time_matrix(nodes, route_mode=resolved_mode, **veh)
     tsp_order = solve_tsp(time_matrix)
 
     ordered_nodes = [
