@@ -8,16 +8,17 @@ from app.core.config import settings
 KAKAO_BASE = "https://apis-navi.kakaomobility.com/v1"
 
 
-async def _get_route_time(
+async def _get_route_info(
     client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
     origin_lat: float,
     origin_lon: float,
     dest_lat: float,
     dest_lon: float,
     *,
     departure_time: str | None = None,
-) -> int:
-    """두 지점 간 예상 소요 시간(초)을 Kakao Mobility API로 반환합니다."""
+) -> tuple[int, int]:
+    """두 지점 간 예상 소요 시간(초)과 거리(m)를 Kakao Mobility API로 반환합니다."""
     headers = {
         "Authorization": f"KakaoAK {settings.KAKAO_API_KEY}",
         "Content-Type": "application/json",
@@ -51,11 +52,15 @@ async def _get_route_time(
             "summary": "true",
         }
 
-    resp = await client.get(url, params=params, headers=headers)
-    resp.raise_for_status()
-    data = resp.json()
+    async with semaphore:
+        resp = await client.get(url, params=params, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
 
-    return int(data["routes"][0]["summary"]["duration"])
+    summary = data["routes"][0]["summary"]
+    duration_sec = int(summary["duration"])
+    distance_m = int(summary.get("distance", 0))
+    return duration_sec, distance_m
 
 
 async def build_time_matrix(
@@ -67,28 +72,36 @@ async def build_time_matrix(
     weight_kg: float | None = None,
     length_cm: float | None = None,
     width_cm: float | None = None,
-) -> list[list[int]]:
-    """N개 노드 리스트로 N×N 시간 행렬(초)을 동시에 계산합니다."""
-    n = len(nodes)
+) -> tuple[list[list[int]], list[list[int]]]:
+    """N개 노드 리스트로 N×N 시간 행렬(초)과 거리 행렬(m)을 동시에 계산합니다.
 
-    async def fetch(client: httpx.AsyncClient, i: int, j: int) -> tuple[int, int, int]:
+    Returns:
+        (time_matrix, distance_matrix) — 각각 N×N 정수 행렬
+    """
+    n = len(nodes)
+    # Kakao 무료 플랜 10 QPS 제한 — 동시 호출 수를 10개로 제한
+    semaphore = asyncio.Semaphore(10)
+
+    async def fetch(client: httpx.AsyncClient, i: int, j: int) -> tuple[int, int, int, int]:
         if i == j:
-            return i, j, 0
-        secs = await _get_route_time(
-            client,
+            return i, j, 0, 0
+        dur, dist = await _get_route_info(
+            client, semaphore,
             nodes[i]["lat"], nodes[i]["lon"],
             nodes[j]["lat"], nodes[j]["lon"],
             departure_time=departure_time,
         )
-        return i, j, secs
+        return i, j, dur, dist
 
     # 클라이언트 1개를 모든 호출이 공유 → TCP 연결 재사용
     async with httpx.AsyncClient(timeout=10.0) as client:
         tasks = [fetch(client, i, j) for i in range(n) for j in range(n)]
         results = await asyncio.gather(*tasks)
 
-    matrix: list[list[int]] = [[0] * n for _ in range(n)]
-    for i, j, val in results:
-        matrix[i][j] = val
+    time_matrix: list[list[int]] = [[0] * n for _ in range(n)]
+    dist_matrix: list[list[int]] = [[0] * n for _ in range(n)]
+    for i, j, dur, dist in results:
+        time_matrix[i][j] = dur
+        dist_matrix[i][j] = dist
 
-    return matrix
+    return time_matrix, dist_matrix

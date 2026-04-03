@@ -73,9 +73,9 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     veh = _resolve_vehicle_params(trip, req)
 
     # ------------------------------------------------------------------
-    # 2. Kakao N×N 시간 행렬 계산
+    # 2. Kakao N×N 시간·거리 행렬 계산
     # ------------------------------------------------------------------
-    time_matrix = await kakao_svc.build_time_matrix(
+    time_matrix, dist_matrix = await kakao_svc.build_time_matrix(
         nodes,
         departure_time=trip.departure_time,
         **veh,
@@ -101,16 +101,20 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     dest_node = RouteNode(type="destination", name=dest_name, lat=dest_lat, lon=dest_lon)
     ordered_nodes.append(dest_node)
 
-    # TSP 결과 기준 time_matrix 재배열
-    ordered_matrix = [
-        [time_matrix[tsp_order[i]][tsp_order[j]] for j in range(len(tsp_order))]
-        for i in range(len(tsp_order))
-    ]
-    n_ordered = len(ordered_nodes)
+    # TSP 결과 기준 time/dist 행렬 재배열
+    dest_idx = len(nodes) - 1  # 원본 노드 리스트에서 목적지 인덱스
+    k = len(tsp_order)
+    n_ordered = len(ordered_nodes)  # k + 1 (목적지 포함)
+
     final_matrix = [[0] * n_ordered for _ in range(n_ordered)]
-    for i in range(len(tsp_order)):
-        for j in range(len(tsp_order)):
-            final_matrix[i][j] = ordered_matrix[i][j]
+    final_dist = [[0] * n_ordered for _ in range(n_ordered)]
+    for i in range(k):
+        for j in range(k):
+            final_matrix[i][j] = time_matrix[tsp_order[i]][tsp_order[j]]
+            final_dist[i][j] = dist_matrix[tsp_order[i]][tsp_order[j]]
+        # 마지막 열: 각 경유지 → 목적지 시간/거리
+        final_matrix[i][k] = time_matrix[tsp_order[i]][dest_idx]
+        final_dist[i][k] = dist_matrix[tsp_order[i]][dest_idx]
 
     # ------------------------------------------------------------------
     # 4. 법정 휴게소 삽입
@@ -145,6 +149,9 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
         final_matrix[i][i + 1]
         for i in range(len(ordered_nodes) - 1)
     )
+    total_distance_km = round(
+        sum(final_dist[i][i + 1] for i in range(len(ordered_nodes) - 1)) / 1000, 1
+    )
 
     route_dicts = [n.to_dict() for n in final_route]
     trip.optimized_route = {
@@ -161,7 +168,7 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     return OptimizeResponse(
         trip_id=trip.id,
         route=[RouteNodeSchema(**n.to_dict()) for n in final_route],
-        total_distance_km=0.0,   # Kakao 응답에서 거리 추가 예정
+        total_distance_km=total_distance_km,
         estimated_duration_min=round(total_sec / 60, 1),
         rest_stops_count=rest_count,
     )
@@ -187,7 +194,7 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
         "width_cm": req.vehicle_width_cm or trip.vehicle_width_cm,
     }
 
-    time_matrix = await kakao_svc.build_time_matrix(nodes, **veh)
+    time_matrix, dist_matrix = await kakao_svc.build_time_matrix(nodes, **veh)
     tsp_order = solve_tsp(time_matrix)
 
     ordered_nodes = [
@@ -213,9 +220,17 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
         for r in rest_result.scalars().all()
     ]
 
+    dest_idx = len(nodes) - 1
+    k = len(tsp_order)
     n = len(ordered_nodes)
-    final_matrix = [[time_matrix[tsp_order[i]][tsp_order[j]] if i < len(tsp_order) and j < len(tsp_order) else 0
-                      for j in range(n)] for i in range(n)]
+    final_matrix = [[0] * n for _ in range(n)]
+    final_dist = [[0] * n for _ in range(n)]
+    for i in range(k):
+        for j in range(k):
+            final_matrix[i][j] = time_matrix[tsp_order[i]][tsp_order[j]]
+            final_dist[i][j] = dist_matrix[tsp_order[i]][tsp_order[j]]
+        final_matrix[i][k] = time_matrix[tsp_order[i]][dest_idx]
+        final_dist[i][k] = dist_matrix[tsp_order[i]][dest_idx]
 
     final_route = insert_rest_stops(
         ordered_nodes, final_matrix, rest_stops_db,
@@ -225,11 +240,14 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
 
     rest_count = sum(1 for nd in final_route if nd.type == "rest_stop")
     total_sec = sum(final_matrix[i][i + 1] for i in range(len(ordered_nodes) - 1))
+    total_distance_km = round(
+        sum(final_dist[i][i + 1] for i in range(len(ordered_nodes) - 1)) / 1000, 1
+    )
 
     return OptimizeResponse(
         trip_id=req.trip_id,
         route=[RouteNodeSchema(**nd.to_dict()) for nd in final_route],
-        total_distance_km=0.0,
+        total_distance_km=total_distance_km,
         estimated_duration_min=round(total_sec / 60, 1),
         rest_stops_count=rest_count,
     )

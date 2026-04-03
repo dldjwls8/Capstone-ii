@@ -109,7 +109,9 @@ def insert_rest_stops(
                         min_rest_minutes=rest_minutes,
                     )
                 )
-            accumulated = 0
+                accumulated = 0  # 휴게소 삽입 성공 시에만 리셋
+            else:
+                accumulated += seg_time  # 후보 없으면 계속 누적
         else:
             accumulated += seg_time
 
