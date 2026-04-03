@@ -73,10 +73,21 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     veh = _resolve_vehicle_params(trip, req)
 
     # ------------------------------------------------------------------
+<<<<<<< HEAD
     # 2. Kakao N×N 시간·거리 행렬 계산
     # ------------------------------------------------------------------
+=======
+    # 2. Kakao NxN 시간·거리 행렬 계산
+    # ------------------------------------------------------------------
+    resolved_mode = (
+        kakao_svc.auto_detect_route_mode(nodes)
+        if req.route_mode == "auto"
+        else req.route_mode
+    )
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
     time_matrix, dist_matrix = await kakao_svc.build_time_matrix(
         nodes,
+        route_mode=resolved_mode,
         departure_time=trip.departure_time,
         **veh,
     )
@@ -101,6 +112,7 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     dest_node = RouteNode(type="destination", name=dest_name, lat=dest_lat, lon=dest_lon)
     ordered_nodes.append(dest_node)
 
+<<<<<<< HEAD
     # TSP 결과 기준 time/dist 행렬 재배열
     dest_idx = len(nodes) - 1  # 원본 노드 리스트에서 목적지 인덱스
     k = len(tsp_order)
@@ -115,12 +127,25 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
         # 마지막 열: 각 경유지 → 목적지 시간/거리
         final_matrix[i][k] = time_matrix[tsp_order[i]][dest_idx]
         final_dist[i][k] = dist_matrix[tsp_order[i]][dest_idx]
+=======
+    # TSP 결과 기준 time_matrix·dist_matrix 재배열
+    n_ordered = len(ordered_nodes)
+    final_matrix = [[0] * n_ordered for _ in range(n_ordered)]
+    final_dist   = [[0] * n_ordered for _ in range(n_ordered)]
+    for i in range(len(tsp_order)):
+        for j in range(len(tsp_order)):
+            final_matrix[i][j] = time_matrix[tsp_order[i]][tsp_order[j]]
+            final_dist[i][j]   = dist_matrix[tsp_order[i]][tsp_order[j]]
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
 
     # ------------------------------------------------------------------
     # 4. 법정 휴게소 삽입
     # ------------------------------------------------------------------
     rest_result = await db.execute(
-        select(RestStop).where(RestStop.is_active == True)  # noqa: E712
+        select(RestStop).where(
+            RestStop.is_active == True,  # noqa: E712
+            RestStop.type != "depot",
+        )
     )
     rest_stops_db = rest_result.scalars().all()
     rest_candidates = preferred_rest + [
@@ -134,17 +159,19 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
         for r in rest_stops_db
     ]
 
-    final_route = insert_rest_stops(
+    final_route = await insert_rest_stops(
         ordered_nodes,
         final_matrix,
         rest_candidates,
         initial_drive_sec=req.initial_drive_sec,
+        picker=kakao_svc.find_best_rest_stop,
     )
 
     # ------------------------------------------------------------------
     # 5. 응답 계산 및 DB 저장
     # ------------------------------------------------------------------
     rest_count = sum(1 for n in final_route if n.type == "rest_stop")
+<<<<<<< HEAD
     total_sec = sum(
         final_matrix[i][i + 1]
         for i in range(len(ordered_nodes) - 1)
@@ -152,6 +179,10 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     total_distance_km = round(
         sum(final_dist[i][i + 1] for i in range(len(ordered_nodes) - 1)) / 1000, 1
     )
+=======
+    total_sec  = sum(final_matrix[i][i + 1] for i in range(len(ordered_nodes) - 1))
+    total_dist_km = sum(final_dist[i][i + 1] for i in range(len(ordered_nodes) - 1)) / 1000
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
 
     route_dicts = [n.to_dict() for n in final_route]
     trip.optimized_route = {
@@ -168,7 +199,11 @@ async def optimize(req: OptimizeRequest, db: AsyncSession = Depends(get_db)):
     return OptimizeResponse(
         trip_id=trip.id,
         route=[RouteNodeSchema(**n.to_dict()) for n in final_route],
+<<<<<<< HEAD
         total_distance_km=total_distance_km,
+=======
+        total_distance_km=round(total_dist_km, 2),
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
         estimated_duration_min=round(total_sec / 60, 1),
         rest_stops_count=rest_count,
     )
@@ -194,7 +229,16 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
         "width_cm": req.vehicle_width_cm or trip.vehicle_width_cm,
     }
 
+<<<<<<< HEAD
     time_matrix, dist_matrix = await kakao_svc.build_time_matrix(nodes, **veh)
+=======
+    resolved_mode = (
+        kakao_svc.auto_detect_route_mode(nodes)
+        if req.route_mode == "auto"
+        else req.route_mode
+    )
+    time_matrix, dist_matrix = await kakao_svc.build_time_matrix(nodes, route_mode=resolved_mode, **veh)
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
     tsp_order = solve_tsp(time_matrix)
 
     ordered_nodes = [
@@ -213,7 +257,10 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
     )
 
     rest_result = await db.execute(
-        select(RestStop).where(RestStop.is_active == True)  # noqa: E712
+        select(RestStop).where(
+            RestStop.is_active == True,  # noqa: E712
+            RestStop.type != "depot",
+        )
     )
     rest_stops_db = [
         {"name": r.name, "latitude": r.latitude, "longitude": r.longitude, "is_active": True}
@@ -223,6 +270,7 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
     dest_idx = len(nodes) - 1
     k = len(tsp_order)
     n = len(ordered_nodes)
+<<<<<<< HEAD
     final_matrix = [[0] * n for _ in range(n)]
     final_dist = [[0] * n for _ in range(n)]
     for i in range(k):
@@ -231,23 +279,39 @@ async def replan(req: ReplanRequest, db: AsyncSession = Depends(get_db)):
             final_dist[i][j] = dist_matrix[tsp_order[i]][tsp_order[j]]
         final_matrix[i][k] = time_matrix[tsp_order[i]][dest_idx]
         final_dist[i][k] = dist_matrix[tsp_order[i]][dest_idx]
+=======
+    final_matrix = [[time_matrix[tsp_order[i]][tsp_order[j]] if i < len(tsp_order) and j < len(tsp_order) else 0
+                      for j in range(n)] for i in range(n)]
+    final_dist   = [[dist_matrix[tsp_order[i]][tsp_order[j]] if i < len(tsp_order) and j < len(tsp_order) else 0
+                      for j in range(n)] for i in range(n)]
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
 
-    final_route = insert_rest_stops(
+    final_route = await insert_rest_stops(
         ordered_nodes, final_matrix, rest_stops_db,
         initial_drive_sec=req.current_drive_sec,
         is_emergency=req.is_emergency,
+        picker=kakao_svc.find_best_rest_stop,
     )
 
     rest_count = sum(1 for nd in final_route if nd.type == "rest_stop")
+<<<<<<< HEAD
     total_sec = sum(final_matrix[i][i + 1] for i in range(len(ordered_nodes) - 1))
     total_distance_km = round(
         sum(final_dist[i][i + 1] for i in range(len(ordered_nodes) - 1)) / 1000, 1
     )
+=======
+    total_sec     = sum(final_matrix[i][i + 1] for i in range(len(ordered_nodes) - 1))
+    total_dist_km = sum(final_dist[i][i + 1]   for i in range(len(ordered_nodes) - 1)) / 1000
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
 
     return OptimizeResponse(
         trip_id=req.trip_id,
         route=[RouteNodeSchema(**nd.to_dict()) for nd in final_route],
+<<<<<<< HEAD
         total_distance_km=total_distance_km,
+=======
+        total_distance_km=round(total_dist_km, 2),
+>>>>>>> 059da269f90aecd2efe21276081d1e44d13af017
         estimated_duration_min=round(total_sec / 60, 1),
         rest_stops_count=rest_count,
     )

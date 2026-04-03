@@ -1,215 +1,191 @@
-# RouteOn — 화물차 경로 최적화 API 서버
+ # RouteOn (루트온)
 
-화물차 법정 휴게 규정(2시간 운전 시 15분 휴식 천재지변이나 교통정체시 추가 1시간 운행이 되지만 30분 휴식)을 자동으로 반영하여  
-OR-Tools로 최적 동선을 계산하는 VRP 엔진입니다.
+화물차 운행 경로를 최적화하면서, 법정 휴게 규정을 자동 반영하는 FastAPI 기반 백엔드입니다.
 
----
-
-## 목차
-
-1. [프로젝트 개요](#1-프로젝트-개요)
-2. [기술 스택](#2-기술-스택)
-3. [빠른 시작 (Docker)](#3-빠른-시작-docker)
-4. [로컬 개발 환경 설정](#4-로컬-개발-환경-설정)
-5. [환경 변수](#5-환경-변수)
-6. [DB 초기화 및 시드 데이터](#6-db-초기화-및-시드-데이터)
-7. [API 엔드포인트](#7-api-엔드포인트)
-8. [핵심 요청/응답 예시](#8-핵심-요청응답-예시)
-9. [VRP 알고리즘 설명](#9-vrp-알고리즘-설명)
-10. [프로젝트 구조](#10-프로젝트-구조)
-11. [테스트 실행](#11-테스트-실행)
-12. [향후 구현 예정](#12-향후-구현-예정)
-
----
+핵심 파이프라인:
+- Kakao Mobility API로 구간 시간/거리 행렬 생성
+- OR-Tools TSP로 방문 순서 최적화
+- 누적 운전 시간 기반 휴게소 자동 삽입
 
 ## 1. 프로젝트 개요
 
-| 항목 | 내용 |
-|---|---|
-| 프로젝트명 | RouteOn (루트온) |
-| 목적 | 화물차 법정 휴게 규정 자동 반영 경로 최적화 |
-| 핵심 기능 | TSP 기반 경유지 순서 최적화 + 법정 휴게소 자동 삽입 |
-| 법적 근거 | 2시간(7,200초) 연속 운전 시 15분(900초) 이상 의무 휴식 |
-| 계획 임계값 | 1시간 40분(6,000초) 도달 시 선제적으로 휴게소 삽입 |
-| 역할 분리 | 관리자(경유지·목적지 등록) / 기사(출발지 전달 → 최적 동선 수신) |
-| 차량 제원 입력 | 관리자 또는 기사(지입기사) 모두 입력 가능 — 기사 입력값이 우선 적용 |
+- 목적: 경유지 순서 최적화 + 법정 휴게 규정 자동 반영
+- 백엔드: FastAPI + SQLAlchemy 2.x async + PostgreSQL(asyncpg)
+- 라우팅 API: Kakao Mobility API
+- 최적화 엔진: OR-Tools
+- 데이터: 휴게소/졸음쉼터 시드 + 운행/차량/기사/위치 로그 CRUD
 
----
+## 2. 법정 상수 (변경 금지)
 
-## 2. 기술 스택
+아래 상수는 backend/app/services/rest_stop_inserter.py 기준입니다.
 
-| 구성 요소 | 버전 |
-|---|---|
-| Python | 3.13 |
-| FastAPI | 0.115.0 |
-| SQLAlchemy (asyncio) | 2.0.34 |
-| PostgreSQL | 16 |
-| OR-Tools | 9.15.6755 |
-| Docker / Docker Compose | - |
-
----
-
-## 3. 빠른 시작 (Docker)
-
-### 사전 요구사항
-- Docker Desktop 설치
-
-### 실행
-
-```bash
-# 1. 저장소 클론
-git clone https://github.com/hongdydk/Capstone-ii.git
-cd Capstone-ii
-
-# 2. 환경 변수 파일 생성
-cp backend/.env.example backend/.env
-
-# 3. Docker Compose 실행
-docker compose up -d
-
-# 4. 컨테이너 상태 확인
-docker compose ps
+```python
+REST_PLAN_SEC        = 6_000   # 1시간 40분: 선제적 휴게 삽입 임계값
+MAX_DRIVE_SEC        = 7_200   # 2시간: 법정 최대 연속 운전
+MIN_REST_MIN         = 15      # 법정 최소 휴식(분)
+EMERGENCY_EXTEND_SEC = 3_600   # 긴급 예외 연장(초): 최대 3시간 연속 운전
+EMERGENCY_REST_MIN   = 30      # 긴급 예외 시 최소 휴식(분)
 ```
 
-정상 실행 시:
-- API 서버: http://localhost:8000
-- Swagger UI: http://localhost:8000/docs
-- 헬스 체크: http://localhost:8000/health
+## 3. 현재 구현 범위
 
-### 중지
+구현 완료:
+- 단일 차량 경로 최적화: POST /optimize/
+- 운행 중 재최적화: POST /optimize/replan
+- 운행/차량/기사/휴게소/위치 로그 CRUD
+- 법정 휴게소 자동 삽입
+- local/long_distance 라우팅 모드
+- departure_time 기반 미래 교통 반영
 
-```bash
-docker compose down          # 컨테이너만 중지
-docker compose down -v       # 컨테이너 + DB 데이터 완전 삭제
+미구현:
+- 다수 차량 VRP 배차: POST /optimize/dispatch (501 Not Implemented)
+
+## 4. 디렉토리 구조
+
+```text
+Capstone-ii/
+├─ README.md
+├─ SCHEMA.md
+├─ 자료/
+│  └─ 한국도로공사_졸음쉼터_20260225.csv
+├─ backend/
+│  ├─ requirements.txt
+│  ├─ app/
+│  │  ├─ main.py
+│  │  ├─ api/
+│  │  ├─ core/
+│  │  ├─ models/
+│  │  ├─ schemas/
+│  │  └─ services/
+│  ├─ seeds/
+│  └─ tests/
+└─ Kakao_navi_api_EX/
 ```
 
----
+## 5. 실행 방법 (로컬 개발)
 
-## 4. 로컬 개발 환경 설정
+현재 저장소에는 docker compose 파일이 포함되어 있지 않아, 기본 실행 경로는 로컬 실행입니다.
 
-Docker 없이 로컬에서 직접 실행하는 경우입니다.
-
-### 사전 요구사항
-- Python 3.13
-- PostgreSQL 16 (로컬 설치 또는 Docker로 DB만 기동)
+사전 요구사항:
+- Python 3.11+
+- PostgreSQL
 
 ```bash
-# DB만 Docker로 띄우기
-docker compose up -d db
-```
+cd backend
 
-### 설치 및 실행
-
-```bash
-# 1. 가상환경 생성 및 활성화
+# 1) 가상환경
 python -m venv .venv
 
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
 
-# 2. 패키지 설치
+# 2) 의존성 설치
 pip install -r requirements.txt
 
-# 3. 환경 변수 설정
-cp backend/.env.example backend/.env
-# backend/.env 편집 → DATABASE_URL을 로컬 DB 주소로 변경
-# 예: DATABASE_URL=postgresql+asyncpg://routeon:routeon@localhost:5432/routeon
+# 3) 환경 변수
+copy .env.example .env
 
-# 4. 서버 실행
-cd backend
+# 4) 서버 실행
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
----
+접속:
+- API: http://localhost:8000
+- Swagger: http://localhost:8000/docs
+- Health: http://localhost:8000/health
 
-## 5. 환경 변수
+## 6. 환경 변수
 
-`backend/.env` 파일에서 설정합니다. (`backend/.env.example` 참고)
+backend/.env
 
-| 변수명 | 기본값 | 설명 |
-|---|---|---|
-| `DATABASE_URL` | `postgresql+asyncpg://routeon:routeon@db:5432/routeon` | PostgreSQL 연결 URL |
-| `SECRET_KEY` | `CHANGE_ME_IN_PRODUCTION` | JWT 서명 키 (배포 시 변경) |
-| `DEBUG` | `false` | 디버그 모드 |
+```env
+DATABASE_URL=postgresql+asyncpg://routeon:routeon@localhost:5432/routeon
+KAKAO_API_KEY=YOUR_KAKAO_REST_API_KEY
+SECRET_KEY=CHANGE_ME_IN_PRODUCTION
+DEBUG=false
+```
 
+주의:
+- KAKAO_API_KEY가 없으면 Kakao 연동 테스트는 skip 됩니다.
+- SECRET_KEY 기본값은 운영 배포 전 반드시 변경하세요.
 
+## 7. 데이터베이스/시드
 
----
+앱 시작 시 SQLAlchemy create_all로 테이블 생성이 수행됩니다.
 
-## 6. DB 초기화 및 시드 데이터
-
-서버 최초 기동 시 `startup` 이벤트에서 테이블이 자동 생성됩니다.  
-아래 시드 스크립트로 고속도로 휴게소 및 물류단지 데이터를 초기 적재합니다.
+휴게소/졸음쉼터 시드:
 
 ```bash
 cd backend
-
-# 휴게소(highway_rest 78건) + 물류단지(depot 56건) 시드 삽입
 python seeds/seed_rest_stops.py
 ```
 
-시드 완료 후 `/rest-stops` API에서 휴게소 목록을 확인할 수 있습니다.
+특이사항:
+- CSV 인코딩: euc-kr
+- 시드 스크립트는 drowsy_shelter 데이터를 rest_stops에 적재
 
----
+## 8. API 요약
 
-## 7. API 엔드포인트
+최적화:
+- POST /optimize/
+- POST /optimize/replan
+- POST /optimize/dispatch (501)
 
-Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
+운행:
+- GET /trips/
+- POST /trips/
+- GET /trips/{trip_id}
+- PATCH /trips/{trip_id}/status
 
-> 현재 인증 없이 모든 엔드포인트를 호출할 수 있습니다.
+차량:
+- GET /vehicles/
+- POST /vehicles/
+- PATCH /vehicles/{vehicle_id}
 
-### 경로 최적화 (핵심)
+운전자:
+- GET /drivers/
+- POST /drivers/
 
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `POST` | `/optimize/` | 단일 차량 경로 최적화 (배차) |
-| `POST` | `/optimize/replan` | 운행 중 재경로 계산 |
-| `POST` | `/optimize/dispatch` | 다수 차량 배차 (구현 예정, 501 반환) |
+휴게소:
+- GET /rest-stops/
+- POST /rest-stops/
+- DELETE /rest-stops/{stop_id}
 
-### 마스터 데이터
+위치 로그:
+- POST /location-logs/
+- GET /location-logs/{trip_id}
 
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `GET` | `/vehicles/` | 차량 목록 조회 |
-| `POST` | `/vehicles/` | 차량 등록 |
-| `PATCH` | `/vehicles/{id}` | 차량 정보 수정 |
-| `GET` | `/drivers/` | 운전자 목록 조회 |
-| `POST` | `/drivers/` | 운전자 등록 |
-| `GET` | `/rest-stops/` | 휴게소 목록 조회 |
-| `POST` | `/rest-stops/` | 휴게소 등록 |
-| `DELETE` | `/rest-stops/{id}` | 휴게소 비활성화 |
+## 9. 최적화 동작 상세
 
-### 운행 관리
+### 9.1 optimize 파이프라인
 
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `GET` | `/trips/` | 운행 목록 조회 |
-| `POST` | `/trips/` | 운행 생성 |
-| `GET` | `/trips/{id}` | 운행 상세 조회 |
-| `PATCH` | `/trips/{id}/status` | 운행 상태 변경 |
+1. trip_id로 Trip 로드
+2. 노드 구성: origin + waypoints + extra_stops + destination
+3. 시간/거리 행렬 생성
+4. OR-Tools TSP로 순서 최적화 (출발지 고정, 목적지 고정)
+5. 누적 운전 시간 기준 휴게소 삽입
+6. optimized_route 저장 후 응답
 
----
+### 9.2 route_mode
 
-## 8. 핵심 요청/응답 예시
+- local:
+  - departure_time이 없으면 다중 목적지 API를 행 단위로 호출 (N회)
+- long_distance:
+  - 실시간 directions 개별 호출 (N^2 - N회)
+- departure_time 존재 시:
+  - 두 모드 모두 future directions 개별 호출 (N^2 - N회)
 
-### 워크플로우 — 관리자 → 기사
+### 9.3 차량 제원 우선순위
 
-```
-[관리자]  POST /trips/        → 경유지·목적지·(차량 제원)·출발 예정 시각 등록
-[기사]    POST /optimize/     → trip_id + 현재 출발 위치 + (차량 제원 override) 전달 → 최적 동선 수신
-```
+최적화 요청값이 trip 저장값보다 우선합니다.
 
-> **차량 제원 우선순위**: 기사(optimize 요청) 입력 > 관리자(trip 등록) 입력  
-> - 관리자가 미리 차량 제원을 등록한 경우 → 기사는 출발지만 전달해도 됩니다.  
-> - 지입기사처럼 본인 차량을 직접 아는 경우 → optimize 호출 시 차량 제원을 직접 입력하면 덮어씁니다.
+- optimize 요청 vehicle_* 존재 -> 요청값 사용
+- 없으면 trip.vehicle_* 사용
 
----
+## 10. 주요 요청 예시
 
-### POST `/trips/` — 운행 생성 (관리자)
+### 10.1 Trip 생성
 
-**요청**
 ```json
 {
   "driver_id": 1,
@@ -218,72 +194,41 @@ Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
   "dest_lat": 35.1796,
   "dest_lon": 129.0756,
   "waypoints": [
-    {"name": "대전 창고", "lat": 36.3504, "lon": 127.3845},
-    {"name": "대구 창고", "lat": 35.8714, "lon": 128.6014}
+    {"name": "대전 창고", "lat": 36.3504, "lon": 127.3845}
   ],
   "vehicle_height_m": 4.0,
   "vehicle_weight_kg": 25000,
-  "vehicle_length_cm": 1600,
-  "vehicle_width_cm": 250,
-  "departure_time": "2026-03-26T08:00:00+0900"
+  "departure_time": "2026-03-26T08:00:00+09:00"
 }
 ```
 
----
+### 10.2 Optimize
 
-### POST `/optimize/` — 경로 최적화 (기사)
-
-**요청 — 관리자가 차량 제원을 미리 등록한 경우 (출발지만 입력)**
 ```json
 {
   "trip_id": 1,
   "origin_name": "서울 자택",
   "origin_lat": 37.5665,
-  "origin_lon": 126.9780,
-  "initial_drive_sec": 0
-}
-```
-
-**요청 — 지입기사가 본인 차량 제원을 직접 입력하는 경우**
-```json
-{
-  "trip_id": 1,
-  "origin_name": "인천 자택",
-  "origin_lat": 37.4563,
-  "origin_lon": 126.7052,
+  "origin_lon": 126.978,
   "initial_drive_sec": 0,
-  "vehicle_height_m": 4.0,
-  "vehicle_weight_kg": 25000,
-  "vehicle_length_cm": 1600,
-  "vehicle_width_cm": 250
+  "route_mode": "long_distance",
+  "extra_stops": [
+    {
+      "stop_type": "rest_preferred",
+      "name": "칠원휴게소",
+      "lat": 35.2345,
+      "lon": 128.4567
+    }
+  ]
 }
 ```
 
-> - 경유지·목적지·출발 예정 시각은 `trip_id`로 DB에서 자동 로드됩니다.
-> - 차량 제원(`vehicle_*`)을 전달하면 trip에 등록된 값을 override합니다.
-> - 아무것도 전달하지 않으면 관리자가 등록한 trip의 차량 제원을 그대로 사용합니다.
+extra_stops.stop_type:
+- waypoint: 경유지 추가
+- destination: 목적지 교체(기존 목적지는 경유지로 이동)
+- rest_preferred: 휴게 후보 우선순위 상향
 
-**응답**
-```json
-{
-  "trip_id": 1,
-  "route": [
-    {"type": "origin",      "name": "서울 물류단지", "lat": 37.5665, "lon": 126.9780},
-    {"type": "waypoint",    "name": "대전 창고",     "lat": 36.3504, "lon": 127.3845},
-    {"type": "rest_stop",   "name": "금강휴게소",    "lat": 35.9876, "lon": 127.5432,
-     "min_rest_minutes": 15},
-    {"type": "waypoint",    "name": "대구 창고",     "lat": 35.8714, "lon": 128.6014},
-    {"type": "destination", "name": "부산 물류단지", "lat": 35.1796, "lon": 129.0756}
-  ],
-  "total_distance_km": 420.5,
-  "estimated_duration_min": 327.0,
-  "rest_stops_count": 1
-}
-```
-
-### POST `/optimize/replan` — 운행 중 재경로 (기사)
-
-운행 도중 정체 등으로 누적 운전시간이 늘어났을 때 호출합니다.
+### 10.3 Replan
 
 ```json
 {
@@ -298,158 +243,35 @@ Swagger UI에서 전체 스펙 확인 가능: **http://localhost:8000/docs**
   "dest_name": "부산 물류단지",
   "dest_lat": 35.1796,
   "dest_lon": 129.0756,
-  "vehicle_height_m": 4.0,
-  "vehicle_weight_kg": 25000
+  "is_emergency": true,
+  "route_mode": "long_distance"
 }
 ```
 
-### ExtraStop — 경유지/목적지/선호 휴게소 추가
-
-`extra_stops` 필드로 운전자·관리자가 실시간으로 지점을 추가할 수 있습니다.
-
-```json
-"extra_stops": [
-  {
-    "stop_type": "waypoint",
-    "name": "긴급 추가 납품처",
-    "lat": 36.0000,
-    "lon": 127.8000,
-    "note": "오전 10시 이전 도착 필요"
-  },
-  {
-    "stop_type": "rest_preferred",
-    "name": "칠원휴게소",
-    "lat": 35.2345,
-    "lon": 128.4567
-  }
-]
-```
-
-| `stop_type` | 동작 |
-|---|---|
-| `"waypoint"` | TSP 순서 최적화 대상에 포함 |
-| `"destination"` | 최종 목적지 변경 (기존 목적지는 경유지로 전환) |
-| `"rest_preferred"` | 선호 휴게소로 후보 목록 최우선 배치 |
-
----
-
-## 9. VRP 알고리즘 설명
-
-### 주요 상수
-
-| 상수 | 값 | 설명 |
-|---|---|---|
-| `MAX_DRIVE_SEC` | 7,200초 (2시간) | 법정 최대 연속 운전 시간 |
-| `REST_PLAN_SEC` | 6,000초 (1시간 40분) | 선제적 휴게 삽입 임계값 |
-| `MIN_REST_SEC` | 900초 (15분) | 법정 최소 휴식 시간 |
-
-### 처리 흐름
-
-```
-1. ExtraStop 분류
-   └─ waypoint → 경유지 목록에 합류
-   └─ destination → 최종 목적지 교체
-   └─ rest_preferred → 휴게소 후보 맨 앞에 배치
-
-2. 외부 라우팅 API로 N×N 시간 행렬 계산
-   └─ 차량 높이/중량/길이/폭 제약 반영
-
-3. OR-Tools TSP로 경유지 방문 순서 최적화
-
-4. 최적화된 순서로 구간별 누적 운전시간 계산
-   └─ REST_PLAN_SEC(6,000초) 도달 구간에서 휴게소 삽입
-   └─ 삽입 기준: 우회 비용(prev→휴게소→next 거리) 최소화
-   └─ 1단계 lookahead: 다음 구간이 더 효율적이면 미룸
-      (단, MAX_DRIVE_SEC 초과 시 강제 삽입)
-```
-
----
-
-## 10. 프로젝트 구조
-
-```
-Capstone-ii/
-├── ReadMe.md                          ← 프로젝트 전체 문서
-├── SCHEMA.md                          ← DB 테이블 정의 (ERD 대체)
-├── 자료/
-│   ├── 한국도로공사_졸음쉼터_20260225.csv  ← 고속도로 졸음쉼터 원본 데이터 (EUC-KR)
-│   └── Rest.txt                       ← 휴게소 참고 메모
-└── backend/
-    ├── .env.example                   ← 환경 변수 템플릿
-    ├── requirements.txt               ← Python 패키지 목록
-    ├── app/
-    │   ├── __init__.py
-    │   ├── main.py                    ← FastAPI 앱 진입점, lifespan·라우터 등록
-    │   ├── api/                       ← HTTP 엔드포인트 (라우터)
-    │   │   ├── __init__.py
-    │   │   ├── optimize.py            ← POST /optimize/, /replan, /dispatch
-    │   │   ├── vehicles.py            ← GET/POST /vehicles/, PATCH /vehicles/{id}
-    │   │   ├── drivers.py             ← GET/POST /drivers/
-    │   │   ├── rest_stops.py          ← GET/POST /rest-stops/, DELETE /rest-stops/{id}
-    │   │   └── trips.py               ← GET/POST /trips/, GET/PATCH /trips/{id}/status
-    │   ├── core/                      ← 앱 공통 설정
-    │   │   ├── __init__.py
-    │   │   ├── config.py              ← pydantic-settings (DATABASE_URL 등)
-    │   │   └── database.py            ← AsyncEngine 생성, get_db 의존성 함수
-    │   ├── models/                    ← SQLAlchemy ORM 모델 (SCHEMA.md 1:1 매핑)
-    │   │   ├── __init__.py
-    │   │   ├── user.py                ← users 테이블
-    │   │   ├── driver.py              ← drivers 테이블
-    │   │   ├── vehicle.py             ← vehicles 테이블
-    │   │   ├── trip.py                ← trips 테이블 (optimized_route JSONB 포함)
-    │   │   ├── rest_stop.py           ← rest_stops 테이블 (졸음쉼터·휴게소)
-    │   │   └── location_log.py        ← location_logs 테이블 (기사 위치 이력)
-    │   ├── schemas/                   ← Pydantic 입출력 스키마 (요청·응답 직렬화)
-    │   │   ├── __init__.py
-    │   │   ├── optimize.py            ← OptimizeRequest/Response, RouteNodeSchema
-    │   │   ├── vehicle.py             ← VehicleCreate / VehicleRead
-    │   │   ├── driver.py              ← DriverCreate / DriverRead
-    │   │   ├── trip.py                ← TripCreate / TripRead
-    │   │   └── rest_stop.py           ← RestStopCreate / RestStopRead
-    │   └── services/                  ← 비즈니스 로직 (라우터에서 호출)
-    │       ├── __init__.py
-    │       ├── kakao.py               ← Kakao Mobility API 연동, N×N 시간 행렬 계산
-    │       ├── optimizer.py           ← OR-Tools TSP (출발지·목적지 depot 고정)
-    │       └── rest_stop_inserter.py  ← 6,000초 임계값 기반 휴게소 자동 삽입
-    ├── seeds/
-    │   ├── init_tables.sql            ← ENUM 타입 + 전체 DDL (수동 실행용)
-    │   └── seed_rest_stops.py         ← 졸음쉼터 CSV(EUC-KR) → DB 일괄 삽입
-    └── tests/
-        └── __init__.py                ← pytest 테스트 패키지
-```
-
----
-
-## 11. 테스트 실행
+## 11. 테스트
 
 ```bash
-cd c:\Capstone-ii   # 또는 프로젝트 루트
-
-# 전체 테스트 실행
-.venv\Scripts\python.exe -m pytest backend/tests/ -v
-
-# 예상 결과
-# ======================= 17 passed in ~15s =======================
+cd backend
+pytest -q
 ```
 
-순수 알고리즘(거리 행렬 모킹)만 테스트합니다.
+테스트 파일:
+- tests/test_route_pipeline.py: TSP + 휴게소 삽입 파이프라인
+- tests/test_kakao_local.py: 지역 배송 모드 통합
+- tests/test_kakao_long.py: 장거리 모드 통합
 
----
+참고:
+- Kakao 통합 테스트는 실제 API 키와 네트워크 상태에 영향을 받습니다.
 
-## 12. 향후 구현 예정
+## 12. 운영/개발 주의사항
 
-| 기능 | 설명 |
-|---|---|
-| 다수 차량 배차 (CVRP) | `POST /optimize/dispatch` — OR-Tools CVRP로 여러 차량에 경유지 분배 |
-| 인증 복원 | `auth.py` 기반 JWT 인증을 엔드포인트에 재적용 |
-| 하이브리드 라우팅 | 단거리(< 50 km) Haversine, 장거리(≥ 50 km) 외부 라우팅 API로 호출 절감 |
+- Kakao API 키 누락/한도 초과(429) 시 일부 경로 조회 실패 가능
+- Kakao 좌표 파라미터는 lon,lat 순서
+- API 미반환 구간은 큰 페널티 시간으로 처리되어 TSP에서 사실상 배제
+- DB 스키마 변경 시 SCHEMA.md, seeds/init_tables.sql, models 동기화 필요
 
----
+## 13. 참고 문서
 
-## 역할 분담
-
-| 역할 | 담당 |
-|---|---|
-| 경로 최적화 엔진, 규정 로직, 총괄 | 팀원 A |
-| 운전자 앱, 관리자 웹 | 팀원 B |
-| API 서버, DB 스키마, Docker 인프라 | 팀원 C |
+- DB 스키마: SCHEMA.md
+- DDL: backend/seeds/init_tables.sql
+- Kakao API 참고 샘플: Kakao_navi_api_EX/
